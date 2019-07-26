@@ -1161,8 +1161,8 @@ class ConvMKLDNNTemplateHandler : public MKLDNNHandler {
   }
 
   mkldnn::primitive_attr CreatePostOps(
-      bool fuse_relu, bool fuse_residual_conn, bool fuse_brelu,
-      float fuse_brelu_threshold,
+      bool fuse_relu, bool fuse_leaky_relu, float fuse_leaky_relu_alpha,
+      bool fuse_residual_conn, bool fuse_brelu, float fuse_brelu_threshold,
       const std::vector<float> output_shift_scale = {},
       float sum_scale = 1.0f) const {
     mkldnn::primitive_attr conv_attr;
@@ -1241,8 +1241,9 @@ class ConvMKLDNNTemplateHandler : public MKLDNNHandler {
                        padding_dims, mkldnn::padding_kind::zero);
 
         mkldnn::primitive_attr conv_attr =
-            CreatePostOps(fuse_relu, fuse_residual_conn, fuse_brelu,
-                          fuse_brelu_threshold, output_shift_scale, sum_scale);
+            CreatePostOps(fuse_relu, fuse_leaky_relu, fuse_leaky_relu_alpha,
+                          fuse_residual_conn, fuse_brelu, fuse_brelu_threshold,
+                          output_shift_scale, sum_scale);
 
         conv_pd_.reset(new typename forward_t::primitive_desc(
             conv_desc, conv_attr, engine));
@@ -1250,7 +1251,6 @@ class ConvMKLDNNTemplateHandler : public MKLDNNHandler {
         dev_ctx_.SetBlob(key_conv_pd, conv_pd_);
       }
     }
-
     return conv_pd_;
   }
 
