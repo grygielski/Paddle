@@ -44,7 +44,7 @@ class TransposeMKLDNNOpKernel : public paddle::framework::OpKernel<T> {
       return;
     }
 
-    auto nchw_tz = paddle::framework::vectorize<int>(input->dims());
+    auto nchw_tz = paddle::framework::vectorize<int64_t>(input->dims());
 
     const std::string key =
         platform::CreateKey(nchw_tz, ctx.op().Output("Out"));
@@ -59,12 +59,13 @@ class TransposeMKLDNNOpKernel : public paddle::framework::OpKernel<T> {
     auto transpose_p = handler.AcquireTranspose(transpose_dst_memory_p,
                                                 transpose_src_memory_p);
 
-    std::vector<mkldnn::primitive> pipeline;
-    pipeline.push_back(*transpose_p);
-    mkldnn::stream(mkldnn::stream::kind::eager).submit(pipeline).wait();
+    mkldnn::stream astream(mkldnn_engine);
+    transpose_p->execute(astream, *transpose_src_memory_p,
+                         *transpose_dst_memory_p);
+    astream.wait();
 
     output->set_layout(DataLayout::kNCHW);
-    output->set_format(MKLDNNMemoryFormat::format_undef);
+    output->set_format(MKLDNNMemoryFormat::undef);
   }
 };
 
@@ -96,7 +97,7 @@ class TransposeMKLDNNGradOpKernel : public paddle::framework::OpKernel<T> {
     const T* out_grad_data = out_grad->data<T>();
     x_grad->mutable_data<T>(ctx.GetPlace());
 
-    auto nchw_tz = paddle::framework::vectorize<int>(out_grad->dims());
+    auto nchw_tz = paddle::framework::vectorize<int64_t>(out_grad->dims());
 
     const std::string key = platform::CreateKey(
         nchw_tz, ctx.op().Output(framework::GradVarName("X")));
@@ -111,9 +112,10 @@ class TransposeMKLDNNGradOpKernel : public paddle::framework::OpKernel<T> {
     auto transpose_p = handler.AcquireTranspose(transpose_dst_memory_p,
                                                 transpose_src_memory_p);
 
-    std::vector<mkldnn::primitive> pipeline;
-    pipeline.push_back(*transpose_p);
-    mkldnn::stream(mkldnn::stream::kind::eager).submit(pipeline).wait();
+    mkldnn::stream astream(mkldnn_engine);
+    transpose_p->execute(astream, *transpose_src_memory_p,
+                         *transpose_dst_memory_p);
+    astream.wait();
   }
 };
 
