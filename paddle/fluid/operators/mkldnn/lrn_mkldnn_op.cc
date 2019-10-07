@@ -64,7 +64,6 @@ class LRNMKLDNNOpKernel : public paddle::framework::OpKernel<T> {
 
     mkldnn::stream astream(dev_ctx.GetEngine());
     if (!workspace_memory->get_desc().is_zero()) {
-      // auto workspace_memory = handler.AcquireWorkspaceMemory(mid);
       lrn_p->execute(astream, {{MKLDNN_ARG_SRC, *src_memory},
                                {MKLDNN_ARG_DST, *dst_memory},
                                {MKLDNN_ARG_WORKSPACE, *workspace_memory}});
