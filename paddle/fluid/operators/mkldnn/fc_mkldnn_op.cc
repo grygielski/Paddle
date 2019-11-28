@@ -42,16 +42,16 @@ class FCPrimitiveFactory {
  public:
   explicit FCPrimitiveFactory(const mkldnn::engine& engine) : engine_(engine) {}
 
-  inner_product_forward CreateFcPrimitive(const LoDTensor* input,
-                                          const Tensor* weights,
-                                          const Tensor* bias, LoDTensor* output,
-                                          const ExecutionContext& ctx) {
+  void ExecuteFcPrimitive(const LoDTensor* input, const Tensor* weights,
+                          const Tensor* bias, LoDTensor* output,
+                          const ExecutionContext& ctx) {
     RecomputeOutputDims(ctx, input, weights, output);
     // If primitive has already been created and cached, don't create new one,
     // but update input and output data pointers and return it.
     if (fc_) {
       UpdateDataPointers(ctx, output, input);
-      return *fc_;
+      this->Execute();
+      return;
     }
     auto src_desc = CreateMemDescriptor<T_in>(input, input->format());
     input_ = CreateMemory<T_in>(src_desc, input);
@@ -73,7 +73,6 @@ class FCPrimitiveFactory {
 
     fc_ = CreateFcPrimitive(*input_, *weights_, dst_desc, bias, output, ctx);
     this->Execute();
-    return *fc_;
   }
 
   void Execute() {
@@ -435,25 +434,24 @@ GetPrimitiveFactory(const MKLDNNDeviceContext& dev_ctx,
 // Choose appropriate primitive factory implementation based on inferred
 // output type (uint8, int8 or float).
 template <typename T_in, typename T_w>
-static inner_product_forward GetFcPrimitive(
-    const MKLDNNDeviceContext& dev_ctx, const ExecutionContext& ctx,
-    const LoDTensor* input, const Tensor* w, const Tensor* bias,
-    LoDTensor* output, const mkldnn::engine& mkldnn_engine, bool fuse_relu,
-    bool force_fp32_output) {
+static void ExecuteFc(const MKLDNNDeviceContext& dev_ctx,
+                      const ExecutionContext& ctx, const LoDTensor* input,
+                      const Tensor* w, const Tensor* bias, LoDTensor* output,
+                      const mkldnn::engine& mkldnn_engine, bool fuse_relu,
+                      bool force_fp32_output) {
   constexpr bool is_int8 =
       std::is_same<T_in, int8_t>::value || std::is_same<T_in, uint8_t>::value;
   if (!is_int8 || force_fp32_output) {
-    return GetPrimitiveFactory<T_in, T_w, float>(dev_ctx, ctx, input, w,
-                                                 mkldnn_engine)
-        ->CreateFcPrimitive(input, w, bias, output, ctx);
+    GetPrimitiveFactory<T_in, T_w, float>(dev_ctx, ctx, input, w, mkldnn_engine)
+        ->ExecuteFcPrimitive(input, w, bias, output, ctx);
   } else if (fuse_relu) {
-    return GetPrimitiveFactory<T_in, T_w, uint8_t>(dev_ctx, ctx, input, w,
-                                                   mkldnn_engine)
-        ->CreateFcPrimitive(input, w, bias, output, ctx);
+    GetPrimitiveFactory<T_in, T_w, uint8_t>(dev_ctx, ctx, input, w,
+                                            mkldnn_engine)
+        ->ExecuteFcPrimitive(input, w, bias, output, ctx);
   } else {
-    return GetPrimitiveFactory<T_in, T_w, int8_t>(dev_ctx, ctx, input, w,
-                                                  mkldnn_engine)
-        ->CreateFcPrimitive(input, w, bias, output, ctx);
+    GetPrimitiveFactory<T_in, T_w, int8_t>(dev_ctx, ctx, input, w,
+                                           mkldnn_engine)
+        ->ExecuteFcPrimitive(input, w, bias, output, ctx);
   }
 }
 
@@ -475,9 +473,8 @@ class FCMKLDNNOpKernel : public framework::OpKernel<T_in> {
     bool fuse_relu = ctx.Attr<std::string>("activation_type") == "relu";
     bool force_fp32_output = ctx.Attr<bool>("force_fp32_output");
 
-    auto fc =
-        GetFcPrimitive<T_in, T_w>(dev_ctx, ctx, input, w, bias, output,
-                                  mkldnn_engine, fuse_relu, force_fp32_output);
+    ExecuteFc<T_in, T_w>(dev_ctx, ctx, input, w, bias, output, mkldnn_engine,
+                         fuse_relu, force_fp32_output);
 
     output->set_layout(DataLayout::kMKLDNN);
   }
