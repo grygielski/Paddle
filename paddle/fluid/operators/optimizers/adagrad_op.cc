@@ -20,6 +20,10 @@ limitations under the License. */
 #include "paddle/fluid/operators/math/math_function.h"
 #include "paddle/fluid/operators/math/selected_rows_functor.h"
 
+#ifdef PADDLE_WITH_MKLDNN
+#include "paddle/fluid/platform/mkldnn_helper.h"
+#endif
+
 namespace paddle {
 namespace operators {
 
@@ -63,8 +67,17 @@ class AdagradOp : public framework::OperatorWithKernel {
   }
   framework::OpKernelType GetExpectedKernelType(
       const framework::ExecutionContext& ctx) const override {
-    return framework::OpKernelType(
-        OperatorWithKernel::IndicateVarDataType(ctx, "Param"), ctx.GetPlace());
+    framework::LibraryType library = framework::LibraryType::kPlain;
+    framework::DataLayout layout = framework::DataLayout::kAnyLayout;
+  #ifdef PADDLE_WITH_MKLDNN
+    if (platform::CanMKLDNNBeUsed(ctx)) {
+      library = framework::LibraryType::kMKLDNN;
+      layout = framework::DataLayout::kMKLDNN;
+    }
+  #endif
+
+    return framework::OpKernelType(OperatorWithKernel::IndicateVarDataType(ctx, "Param"),
+                                   ctx.GetPlace(), layout, library);
   }
 };
 
@@ -83,6 +96,9 @@ class AdagradOpMaker : public framework::OpProtoAndCheckerMaker {
                    "(float, default 1.0e-6) "
                    "Constant for numerical stability")
         .SetDefault(1.0e-6f);
+    AddAttr<bool>("use_mkldnn",
+                "(bool, default false) Only used in mkldnn kernel")
+      .SetDefault(false);
     AddComment(R"DOC(
 
 Adaptive Gradient Algorithm (Adagrad).
@@ -145,6 +161,140 @@ struct SparseAdagradFunctor<platform::CPUDeviceContext, T> {
 
 template struct SparseAdagradFunctor<platform::CPUDeviceContext, float>;
 template struct SparseAdagradFunctor<platform::CPUDeviceContext, double>;
+
+template <typename T>
+class AdagradMKLDNNKernel : public paddle::framework::OpKernel<T> {
+public:
+  void Compute(const framework::ExecutionContext &ctx) const override {
+    // std::cout<<"@@@@@@@@@@@@@@@@@@@@ Working\n";
+
+    auto& dev_ctx = ctx.template device_context<paddle::platform::MKLDNNDeviceContext>();
+    const auto& mkldnn_engine = dev_ctx.GetEngine();
+
+    const auto* param = ctx.Input<Tensor>("Param");
+    const auto* grad = ctx.Input<Tensor>("Grad");
+    const auto* moment = ctx.Input<Tensor>("Moment");
+    const auto *learning_rate = ctx.Input<Tensor>("LearningRate");
+
+    auto* param_out = ctx.Output<Tensor>("ParamOut");
+    auto* moment_out = ctx.Output<Tensor>("MomentOut");
+
+    T epsilon = static_cast<T>(ctx.Attr<float>("epsilon"));
+
+    auto* param_data = param->data<T>();
+    auto* grad_data = grad->data<T>();
+    auto* moment_data = moment->data<T>();
+    auto* learning_rate_data = learning_rate->data<T>();
+
+    auto* param_out_data = param_out->mutable_data<T>(ctx.GetPlace());
+    auto* moment_out_data = moment_out->mutable_data<T>(ctx.GetPlace());
+
+    auto numel = param->numel();
+
+    dnnl::stream engine_stream(mkldnn_engine);
+    if (dev_ctx.GetBlob("@grad_m") == nullptr) {
+      auto common_md = dnnl::memory::desc({numel}, platform::MKLDNNGetDataType<T>(), MKLDNNMemoryFormat::a);
+
+      // MOMENT_OUT CALCULATIONS
+      memcpy(moment_out_data, moment_data, sizeof(T) * numel);
+      auto grad_m = std::make_shared<dnnl::memory>(common_md, mkldnn_engine, platform::to_void_cast<T>(grad_data));
+      dev_ctx.SetBlob("@grad_m", grad_m);
+
+      auto m_out_m = std::make_shared<dnnl::memory>(common_md, mkldnn_engine, platform::to_void_cast<T>(moment_out_data));
+      dev_ctx.SetBlob("@m_out_m", m_out_m);
+
+      auto binary_d = dnnl::binary::desc(dnnl::algorithm::binary_mul, common_md, common_md, common_md);
+
+      dnnl::post_ops binary_ops;
+      binary_ops.append_sum(1.0f);
+      dnnl::primitive_attr binary_attr;
+      binary_attr.set_post_ops(binary_ops);
+
+      auto binary_pd = dnnl::binary::primitive_desc(binary_d, binary_attr, mkldnn_engine);
+      auto binary_prim = std::make_shared<dnnl::binary>(binary_pd);
+      dev_ctx.SetBlob("@binary_prim", binary_prim);
+
+      binary_prim->execute(engine_stream, {{DNNL_ARG_SRC_0, *grad_m},
+                                          {DNNL_ARG_SRC_1, *grad_m},
+                                          {DNNL_ARG_DST, *m_out_m}});
+      engine_stream.wait();
+
+      // PARAM_OUT CALCULATIONS
+      memcpy(param_out_data, param_data, sizeof(T) * numel);
+
+      auto intermediate_m = std::make_shared<dnnl::memory>(common_md, mkldnn_engine);
+      dev_ctx.SetBlob("@intermediate_m", intermediate_m);
+
+      auto w_out_m = std::make_shared<dnnl::memory>(common_md, mkldnn_engine, platform::to_void_cast<T>(param_out_data));
+      dev_ctx.SetBlob("@w_out_m", w_out_m);
+
+      auto eltwise_sqrt_d = dnnl::eltwise_forward::desc(dnnl::prop_kind::forward_inference, dnnl::algorithm::eltwise_sqrt,
+                                                        common_md, 0.f, 0.f);
+      auto eltwise_sqrt_pd = dnnl::eltwise_forward::primitive_desc(eltwise_sqrt_d, mkldnn_engine);
+      auto eltwise_sqrt_prim = std::make_shared<dnnl::eltwise_forward>(eltwise_sqrt_pd);
+      dev_ctx.SetBlob("@eltwise_sqrt_prim", eltwise_sqrt_prim);
+
+      auto eltwise_linear_d = dnnl::eltwise_forward::desc(dnnl::prop_kind::forward_inference, dnnl::algorithm::eltwise_linear,
+                                                          common_md, 1.f, epsilon);
+      auto eltwise_linear_pd = dnnl::eltwise_forward::primitive_desc(eltwise_linear_d, mkldnn_engine);
+      auto eltwise_linear_prim = std::make_shared<dnnl::eltwise_forward>(eltwise_linear_pd);
+      dev_ctx.SetBlob("@eltwise_linear_prim", eltwise_linear_prim);
+
+      auto eltwise_pow_d = dnnl::eltwise_forward::desc(dnnl::prop_kind::forward_inference, dnnl::algorithm::eltwise_pow,
+                                                          common_md, -(learning_rate_data[0]), -1.f);
+      auto eltwise_pow_pd = dnnl::eltwise_forward::primitive_desc(eltwise_pow_d, mkldnn_engine);
+      auto eltwise_pow_prim = std::make_shared<dnnl::eltwise_forward>(eltwise_pow_pd);
+      dev_ctx.SetBlob("@eltwise_pow_prim", eltwise_pow_prim);
+
+      eltwise_sqrt_prim->execute(engine_stream, {{DNNL_ARG_SRC, *m_out_m},
+                                              {DNNL_ARG_DST, *intermediate_m}});
+      eltwise_linear_prim->execute(engine_stream, {{DNNL_ARG_SRC, *intermediate_m},
+                                                  {DNNL_ARG_DST, *intermediate_m}});
+      eltwise_pow_prim->execute(engine_stream, {{DNNL_ARG_SRC, *intermediate_m},
+                                                {DNNL_ARG_DST, *intermediate_m}});
+      binary_prim->execute(engine_stream, {{DNNL_ARG_SRC_0, *grad_m},
+                                          {DNNL_ARG_SRC_1, *intermediate_m},
+                                          {DNNL_ARG_DST, *w_out_m}});
+      engine_stream.wait();
+    } else {
+      // MOMENT_OUT CALCULATIONS
+      memcpy(moment_out_data, moment_data, sizeof(T) * numel);
+      auto grad_m = std::static_pointer_cast<dnnl::memory>(dev_ctx.GetBlob("@grad_m"));
+      grad_m->set_data_handle(platform::to_void_cast<T>(grad_data));
+      auto m_out_m = std::static_pointer_cast<dnnl::memory>(dev_ctx.GetBlob("@m_out_m"));
+      m_out_m->set_data_handle(platform::to_void_cast<T>(moment_out_data));
+
+      auto binary_prim = std::static_pointer_cast<dnnl::binary>(dev_ctx.GetBlob("@binary_prim"));
+
+      binary_prim->execute(engine_stream, {{DNNL_ARG_SRC_0, *grad_m},
+                                          {DNNL_ARG_SRC_1, *grad_m},
+                                          {DNNL_ARG_DST, *m_out_m}});
+      engine_stream.wait();
+
+      // PARAM_OUT CALCULATIONS
+      memcpy(param_out_data, param_data, sizeof(T) * numel);
+      auto intermediate_m = std::static_pointer_cast<dnnl::memory>(dev_ctx.GetBlob("@intermediate_m"));
+      auto w_out_m = std::static_pointer_cast<dnnl::memory>(dev_ctx.GetBlob("@w_out_m"));
+      w_out_m->set_data_handle(platform::to_void_cast<T>(param_out_data));
+
+      auto eltwise_sqrt_prim = std::static_pointer_cast<dnnl::eltwise_forward>(dev_ctx.GetBlob("@eltwise_sqrt_prim"));
+      auto eltwise_linear_prim = std::static_pointer_cast<dnnl::binary>(dev_ctx.GetBlob("@eltwise_linear_prim"));
+      auto eltwise_pow_prim = std::static_pointer_cast<dnnl::binary>(dev_ctx.GetBlob("@eltwise_pow_prim"));
+
+      eltwise_sqrt_prim->execute(engine_stream, {{DNNL_ARG_SRC, *m_out_m},
+                                              {DNNL_ARG_DST, *intermediate_m}});
+      eltwise_linear_prim->execute(engine_stream, {{DNNL_ARG_SRC, *intermediate_m},
+                                                  {DNNL_ARG_DST, *intermediate_m}});
+      eltwise_pow_prim->execute(engine_stream, {{DNNL_ARG_SRC, *intermediate_m},
+                                              {DNNL_ARG_DST, *intermediate_m}});
+      binary_prim->execute(engine_stream, {{DNNL_ARG_SRC_0, *grad_m},
+                                          {DNNL_ARG_SRC_1, *intermediate_m},
+                                          {DNNL_ARG_DST, *w_out_m}});
+      engine_stream.wait();
+    }
+  }
+};
+
 }  // namespace operators
 }  // namespace paddle
 
@@ -153,3 +303,5 @@ REGISTER_OP_WITHOUT_GRADIENT(adagrad, ops::AdagradOp, ops::AdagradOpMaker);
 REGISTER_OP_CPU_KERNEL(
     adagrad, ops::AdagradOpKernel<paddle::platform::CPUDeviceContext, float>,
     ops::AdagradOpKernel<paddle::platform::CPUDeviceContext, double>);
+REGISTER_OP_KERNEL(adagrad, MKLDNN, ::paddle::platform::CPUPlace,
+                   ops::AdagradMKLDNNKernel<float>);
