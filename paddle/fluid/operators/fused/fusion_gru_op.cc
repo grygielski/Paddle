@@ -133,7 +133,9 @@ framework::OpKernelType FusionGRUOp::GetExpectedKernelType(
     layout = framework::DataLayout::kMKLDNN;
   }
 #endif
-  return framework::OpKernelType(OperatorWithKernel::IndicateVarDataType(ctx, "X"), ctx.GetPlace(), layout, library);
+  return framework::OpKernelType(
+      OperatorWithKernel::IndicateVarDataType(ctx, "X"), ctx.GetPlace(), layout,
+      library);
 }
 
 void FusionGRUOpMaker::Make() {
@@ -194,9 +196,9 @@ void FusionGRUOpMaker::Make() {
                 "whether to use seq mode to compute GRU.")
       .SetDefault(true);
   AddAttr<bool>("origin_mode",
-                  "bool"
-                  "use origin mode in article https://arxiv.org/abs/1412.3555")
-        .SetDefault(false);
+                "bool"
+                "use origin mode in article https://arxiv.org/abs/1412.3555")
+      .SetDefault(false);
   AddAttr<bool>("use_mkldnn",
                 "(bool, default false) Only used in mkldnn kernel")
       .SetDefault(false);
