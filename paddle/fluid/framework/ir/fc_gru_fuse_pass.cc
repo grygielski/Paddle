@@ -54,7 +54,8 @@ static int BuildFusion(Graph* graph, const std::string& name_scope,
     op_desc.SetInput("H0", {});
     op_desc.SetOutput("Hidden", {hidden->Name()});
     op_desc.SetAttr("is_reverse", gru->Op()->GetAttr("is_reverse"));
-    op_desc.SetAttr("origin_mode", gru->Op()->GetAttr("origin_mode"));
+    op_desc.SetAttr("origin_mode",
+                    gru->Op()->GetAttrIfExists<bool>("origin_mode"));
     // TODO(TJ): This should be a option for infer
     op_desc.SetAttr("use_seq", true);
 
