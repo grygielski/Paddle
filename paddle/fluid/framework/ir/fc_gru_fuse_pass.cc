@@ -26,8 +26,8 @@ static int BuildFusion(Graph* graph, const std::string& name_scope,
   GraphPatternDetector gpd;
   auto* pattern = gpd.mutable_pattern();
 
-  PDNode* x = pattern->NewNode(patterns::UniqueKey("x"))
-                ->assert_var_not_persistable();
+  PDNode* x =
+      pattern->NewNode(patterns::UniqueKey("x"))->assert_var_not_persistable();
 
   // Create pattern.
   patterns::FC fc_pattern(pattern, name_scope);
@@ -69,18 +69,26 @@ static int BuildFusion(Graph* graph, const std::string& name_scope,
     if (with_fc_bias) {
       auto* gru_bias_var = scope->FindVar(bias->Name());
       auto* fc_bias_var = scope->FindVar(fc_bias->Name());
-      PADDLE_ENFORCE_NE(gru_bias_var, nullptr, platform::errors::NotFound("GRU bias var has not been found."));
-      PADDLE_ENFORCE_NE(fc_bias_var, nullptr, platform::errors::NotFound("FC bias var has not been found."));
-      
+      PADDLE_ENFORCE_NE(
+          gru_bias_var, nullptr,
+          platform::errors::NotFound("GRU bias var has not been found."));
+      PADDLE_ENFORCE_NE(
+          fc_bias_var, nullptr,
+          platform::errors::NotFound("FC bias var has not been found."));
+
       auto* gru_bias_tensor = gru_bias_var->GetMutable<LoDTensor>();
       auto* fc_bias_tensor = fc_bias_var->GetMutable<LoDTensor>();
-      PADDLE_ENFORCE_EQ(gru_bias_tensor->numel(), fc_bias_tensor->numel(), platform::errors::PreconditionNotMet("GRU and FC biases have to have equal number of elements."));
+      PADDLE_ENFORCE_EQ(
+          gru_bias_tensor->numel(), fc_bias_tensor->numel(),
+          platform::errors::PreconditionNotMet(
+              "GRU and FC biases have to have equal number of elements."));
 
-      auto gru_bias_data = gru_bias_tensor->mutable_data<float>(platform::CPUPlace());
+      auto gru_bias_data =
+          gru_bias_tensor->mutable_data<float>(platform::CPUPlace());
       auto* fc_bias_data = fc_bias_tensor->data<float>();
 
       // Recompute GRU bias
-      for (int i=0; i<gru_bias_tensor->numel(); ++i) {
+      for (int i = 0; i < gru_bias_tensor->numel(); ++i) {
         gru_bias_data[i] += fc_bias_data[i];
       }
     }
