@@ -392,6 +392,12 @@ void PredictionRun(PaddlePredictor *predictor,
       FLAGS_iterations < static_cast<int64_t>(inputs.size()))
     iterations =
         FLAGS_iterations;  // ... unless the number of iterations is set
+  
+  /////////////////////////////////////
+  num_times = 10;
+  iterations = inputs.size();
+  ////////////////////////////////////
+
   outputs->resize(iterations);
   LOG(INFO) << "Thread " << tid << ", number of threads " << num_threads
             << ", run " << num_times << " times...";

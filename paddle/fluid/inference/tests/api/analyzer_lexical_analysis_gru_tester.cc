@@ -29,6 +29,7 @@ void SetConfig(AnalysisConfig *cfg) {
   cfg->SwitchSpecifyInputNames(false);
   cfg->SetCpuMathLibraryNumThreads(FLAGS_cpu_num_threads);
   cfg->EnableMKLDNN();
+  cfg->EnableMkldnnBFloat16();
 }
 
 std::vector<size_t> ReadSentenceLod(std::ifstream &file, size_t offset,
@@ -112,6 +113,7 @@ void SetInput(std::vector<std::vector<PaddleTensor>> *inputs,
   if (FLAGS_iterations > 0 && FLAGS_iterations < iterations_max) {
     iterations = FLAGS_iterations;
   }
+  iterations = iterations_max;
 
   for (auto i = 0; i < iterations; i++) {
     // Calculate the words num.  Shape=[words_num, 1]

@@ -436,4 +436,5 @@ class FusionGRUMKLDNNKernel : public framework::OpKernel<T> {
 
 namespace ops = paddle::operators;
 REGISTER_OP_KERNEL(fusion_gru, MKLDNN, paddle::platform::CPUPlace,
-                   ops::FusionGRUMKLDNNKernel<float>);
+                   ops::FusionGRUMKLDNNKernel<float>,
+                   ops::FusionGRUMKLDNNKernel<paddle::platform::bfloat16>);

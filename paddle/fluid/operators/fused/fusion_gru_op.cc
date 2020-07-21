@@ -202,6 +202,12 @@ void FusionGRUOpMaker::Make() {
   AddAttr<bool>("use_mkldnn",
                 "(bool, default false) Only used in mkldnn kernel")
       .SetDefault(false);
+  AddAttr<bool>(
+        "use_bfloat16",
+        "(bool, default false) "
+        "Set to true for operators that should be converted to bfloat16 kernel"
+        "Only used on CPU.")
+        .SetDefault(false);
   AddComment(R"DOC(
 The Fusion complete GRU Operator.
 This operator fuse the fully-connected operator into GRU, 
