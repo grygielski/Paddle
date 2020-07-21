@@ -143,6 +143,10 @@ void GpuPassStrategy::EnableMkldnnQuantizer() {
   LOG(ERROR) << "GPU not support MKL-DNN quantization";
 }
 
+void GpuPassStrategy::EnableMkldnnBFloat16() {
+  LOG(ERROR) << "GPU not support MKL-DNN bfloat16";
+}
+
 CpuPassStrategy::CpuPassStrategy() : PassStrategy({}) {
   // NOTE the large fusions should be located in the front, so that they will
   // not be damaged by smaller ones.
@@ -199,7 +203,7 @@ void CpuPassStrategy::EnableMKLDNN() {
              "reshape_transpose_matmul_mkldnn_fuse_pass",  //
              "matmul_transpose_reshape_fuse_pass",         //
              // Disabled due to topology-dependent speed-up
-             // "fc_mkldnn_pass",
+             "fc_mkldnn_pass",
              "mkldnn_inplace_pass",  // This pass should be activated after
                                      // fuses
          })) {
@@ -220,6 +224,18 @@ void CpuPassStrategy::EnableMkldnnQuantizer() {
   use_mkldnn_quantizer_ = true;
 #else
   use_mkldnn_quantizer_ = false;
+#endif
+}
+
+void CpuPassStrategy::EnableMkldnnBFloat16() {
+#ifdef PADDLE_WITH_MKLDNN
+  if (!use_mkldnn_bfloat16_) {
+    passes_.push_back("cpu_bfloat16_placement_pass");
+    passes_.push_back("cpu_bfloat16_pass");
+  }
+  use_mkldnn_bfloat16_ = true;
+#else
+  use_mkldnn_bfloat16_ = false;
 #endif
 }
 
