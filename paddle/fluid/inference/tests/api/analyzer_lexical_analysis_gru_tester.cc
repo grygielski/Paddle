@@ -22,6 +22,8 @@ namespace paddle {
 namespace inference {
 namespace analysis {
 
+// #define FLAGS_batch_size 10
+
 void SetConfig(AnalysisConfig *cfg) {
   cfg->SetModel(FLAGS_infer_model);
   cfg->DisableGpu();
@@ -29,7 +31,7 @@ void SetConfig(AnalysisConfig *cfg) {
   cfg->SwitchSpecifyInputNames(false);
   cfg->SetCpuMathLibraryNumThreads(FLAGS_cpu_num_threads);
   cfg->EnableMKLDNN();
-  cfg->EnableMkldnnBFloat16();
+  //cfg->EnableMkldnnBFloat16();
 }
 
 std::vector<size_t> ReadSentenceLod(std::ifstream &file, size_t offset,

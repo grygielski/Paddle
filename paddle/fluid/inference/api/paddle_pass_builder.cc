@@ -205,6 +205,7 @@ void CpuPassStrategy::EnableMKLDNN() {
              // Disabled due to topology-dependent speed-up
              // "fc_mkldnn_pass",
              "mkldnn_placement_pass",
+             "bidirectional_gru_mkldnn_fuse_pass",
              "mkldnn_inplace_pass",  // This pass should be activated after
                                      // fuses
          })) {

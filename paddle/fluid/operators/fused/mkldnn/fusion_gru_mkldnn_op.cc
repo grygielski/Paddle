@@ -33,12 +33,13 @@ class GRUMKLDNNHandler : public platform::MKLDNNHandlerT<T, dnnl::gru_forward> {
                    const mkldnn::engine mkldnn_engine,
                    platform::Place cpu_place, const LoDTensor* input,
                    const Tensor* weight_h, const Tensor* h0,
-                   const bool is_reverse, const int64_t N, const int64_t Ti,
+                   const bool is_reverse, const std::string& bidirectional_type, const int64_t N, const int64_t Ti,
                    const int64_t IC, const int64_t OC,
                    const std::string& unique_name)
       : platform::MKLDNNHandlerT<T, dnnl::gru_forward>(
             dev_ctx, dev_ctx.GetEngine(), cpu_place,
             platform::CreateKey(unique_name, Ti)),
+        D((bidirectional_type != "none") ? 2 : 1),
         N(N),
         Ti(Ti),
         IC(IC),
@@ -64,9 +65,8 @@ class GRUMKLDNNHandler : public platform::MKLDNNHandlerT<T, dnnl::gru_forward> {
               "oneDNN fusion_gru supports only tanh as an activation."));
 
       // oneDNN RNN dimensions
-      const int64_t D = 1;  // Directions
-      const int64_t L = 1;  // Layers (PP supports only 1 stacked layer)
-      const int64_t G = 3;  // Number of Gates, 3 for GRU
+      const int64_t L = 1;                         // Layers (PP supports only 1 stacked layer)
+      const int64_t G = 3;                         // Number of Gates, 3 for GRU
 
       // Create memory descriptors
       auto input_md = MKLDNNMemDesc({Ti, N, IC}, MKLDNNGetDataType<T>(),
@@ -77,7 +77,7 @@ class GRUMKLDNNHandler : public platform::MKLDNNHandlerT<T, dnnl::gru_forward> {
           {L, D, OC, G, OC}, MKLDNNGetDataType<T>(), MKLDNNMemoryFormat::any);
       auto bias_md = MKLDNNMemDesc({L, D, G, OC}, MKLDNNGetDataType<float>(),
                                    MKLDNNMemoryFormat::ldgo);
-      auto hidden_md = MKLDNNMemDesc({Ti, N, OC}, MKLDNNGetDataType<T>(),
+      auto hidden_md = MKLDNNMemDesc({Ti, N, (bidirectional_type == "concat" ? 2 : 1) * OC}, MKLDNNGetDataType<T>(),
                                      MKLDNNMemoryFormat::any);
       auto h0_md = dnnl::memory::desc();
       if (h0) {
@@ -86,9 +86,12 @@ class GRUMKLDNNHandler : public platform::MKLDNNHandlerT<T, dnnl::gru_forward> {
       }
 
       // Create GRU oneDNN primitive
-      const auto direction =
+      auto direction =
           is_reverse ? dnnl::rnn_direction::unidirectional_right2left
                      : dnnl::rnn_direction::unidirectional_left2right;
+
+      if (bidirectional_type == "concat") direction = dnnl::rnn_direction::bidirectional_concat;
+      else if (bidirectional_type == "sum") direction = dnnl::rnn_direction::bidirectional_sum;
 
       this->AcquireForwardPrimitiveDescriptor(
           dnnl::prop_kind::forward_inference, direction, input_md, h0_md,
@@ -133,9 +136,9 @@ class GRUMKLDNNHandler : public platform::MKLDNNHandlerT<T, dnnl::gru_forward> {
       case platform::RNNReorderType::NTC_PP: {
         auto* output_data_iter = output_data;
         for (int n = 0; n < N; ++n) {
-          const auto num_elements = (lod[n + 1] - lod[n]) * OC;
-          const auto offset = is_reverse ? (Ti * OC - num_elements) : 0;
-          memcpy(output_data_iter, input_data + n * Ti * OC + offset,
+          const auto num_elements = (lod[n + 1] - lod[n]) * D * OC;
+          const auto offset = is_reverse ? (Ti * D * OC - num_elements) : 0;
+          memcpy(output_data_iter, input_data + n * Ti * D * OC + offset,
                  sizeof(T) * num_elements);
           output_data_iter += num_elements;
         }
@@ -148,8 +151,8 @@ class GRUMKLDNNHandler : public platform::MKLDNNHandlerT<T, dnnl::gru_forward> {
           const auto offset = is_reverse ? (Ti - num_elements) : 0;
           for (size_t t = 0; t < num_elements; ++t) {
             memcpy(output_data_iter,
-                   input_data + (t + offset) * N * OC + n * OC, sizeof(T) * OC);
-            output_data_iter += OC;
+                   input_data + (t + offset) * N * D * OC + n * D * OC, sizeof(T) * D * OC);
+            output_data_iter += D * OC;
           }
         }
       } break;
@@ -172,7 +175,8 @@ class GRUMKLDNNHandler : public platform::MKLDNNHandlerT<T, dnnl::gru_forward> {
     auto* x_data = input->data<T>();
 
     auto* x_onednn_data = reinterpret_cast<T*>(memory_p->get_data_handle());
-    memset(x_onednn_data, 0, sizeof(T) * N * Ti * IC);
+    for (long int i=0; i<(N * Ti * IC); ++i) x_onednn_data[i] = 0;
+    //memset(x_onednn_data, 0, sizeof(T) * N * Ti * IC);
 
     if (platform::GetMKLDNNFormat(this->fwd_pd_->src_desc()) ==
         dnnl::memory::format_tag::ntc) {
@@ -223,21 +227,23 @@ class GRUMKLDNNHandler : public platform::MKLDNNHandlerT<T, dnnl::gru_forward> {
 
     if (!memory_p) {
       auto user_md =
-          MKLDNNMemDesc({1, 1, IC, 3, OC}, MKLDNNGetDataType<float>(),
+          MKLDNNMemDesc({1, D, IC, 3, OC}, MKLDNNGetDataType<float>(),
                         MKLDNNMemoryFormat::ldigo);
       auto user_memory = dnnl::memory(user_md, this->engine_);
 
       auto* weight_x_data =
           reinterpret_cast<float*>(user_memory.get_data_handle());
       memcpy(weight_x_data, weight_x->data<float>(),
-             sizeof(float) * IC * 3 * OC);
+             sizeof(float) * D * IC * 3 * OC);
 
       if (origin_mode == false) {
-        for (int64_t i = 0; i < IC; ++i) {
-          for (int64_t j = 0; j < OC; ++j) {
-            weight_x_data[j] *= -1;
+        for (int64_t d = 0; d < D; ++d) {
+          for (int64_t i = 0; i < IC; ++i) {
+            for (int64_t j = 0; j < OC; ++j) {
+              weight_x_data[j] *= -1;
+            }
+            weight_x_data += 3 * OC;
           }
-          weight_x_data += 3 * OC;
         }
       }
 
@@ -261,7 +267,7 @@ class GRUMKLDNNHandler : public platform::MKLDNNHandlerT<T, dnnl::gru_forward> {
 
     if (!memory_p) {
       auto user_md =
-          MKLDNNMemDesc({1, 1, OC, 3, OC}, MKLDNNGetDataType<float>(),
+          MKLDNNMemDesc({1, D, OC, 3, OC}, MKLDNNGetDataType<float>(),
                         MKLDNNMemoryFormat::ldigo);
       auto user_memory = dnnl::memory(user_md, this->engine_);
 
@@ -274,23 +280,27 @@ class GRUMKLDNNHandler : public platform::MKLDNNHandlerT<T, dnnl::gru_forward> {
       auto src1_iter = user_weight_h_data;
       auto src2_iter = user_weight_h_data + 2 * OC * OC;
 
-      for (int64_t c = 0; c < OC; ++c) {
-        memcpy(weight_h_data, src1_iter, 2 * OC * sizeof(float));
-        memcpy(weight_h_data + 2 * OC, src2_iter, OC * sizeof(float));
+      for (int64_t d = 0; d < D; ++d) {
+        for (int64_t c = 0; c < OC; ++c) {
+          memcpy(weight_h_data, src1_iter, 2 * OC * sizeof(float));
+          memcpy(weight_h_data + 2 * OC, src2_iter, OC * sizeof(float));
 
-        src1_iter += 2 * OC;
-        src2_iter += OC;
-        weight_h_data += 3 * OC;
+          src1_iter += 2 * OC;
+          src2_iter += OC;
+          weight_h_data += 3 * OC;
+        }
       }
 
       weight_h_data = reinterpret_cast<float*>(user_memory.get_data_handle());
 
       if (origin_mode == false) {
-        for (int64_t i = 0; i < OC; ++i) {
-          for (int64_t j = 0; j < OC; ++j) {
-            weight_h_data[j] *= -1;
+        for (int64_t d = 0; d < D; ++d) {
+          for (int64_t i = 0; i < OC; ++i) {
+            for (int64_t j = 0; j < OC; ++j) {
+              weight_h_data[j] *= -1;
+            }
+            weight_h_data += 3 * OC;
           }
-          weight_h_data += 3 * OC;
         }
       }
 
@@ -319,16 +329,19 @@ class GRUMKLDNNHandler : public platform::MKLDNNHandlerT<T, dnnl::gru_forward> {
       if (bias) {
         const float* user_bias_data =
             bias->data<float>();  // Bias in oneDNN is always float
-        memcpy(bias_data, user_bias_data, sizeof(float) * 3 * OC);
+        memcpy(bias_data, user_bias_data, sizeof(float) * D * 3 * OC);
       } else {
         // oneDNN always need bias memory, if it's not provided in PP, let
         // oneDNN allocate memory and set it to 0
-        memset(bias_data, 0, sizeof(float) * 3 * OC);
+        memset(bias_data, 0, sizeof(float) * D * 3 * OC);
       }
 
       if (origin_mode == false && bias) {
-        for (int64_t i = 0; i < OC; ++i) {
-          bias_data[i] *= -1;
+        for (int64_t d = 0; d < D; ++d) {
+          for (int64_t i = 0; i < OC; ++i) {
+            bias_data[i] *= -1;
+          }
+          bias_data += 3 * OC;
         }
       }
       this->dev_ctx_.SetBlob(bias_key, memory_p);
@@ -338,11 +351,12 @@ class GRUMKLDNNHandler : public platform::MKLDNNHandlerT<T, dnnl::gru_forward> {
 
  private:
   // RNN dimensions
+  // D - Directions
   // N - Batch Size
   // Ti - Max sentence length
   // IC - Input Channels
   // OC - Output Channels
-  const int64_t N, Ti, IC, OC;
+  const int64_t D, N, Ti, IC, OC;
 
   // Memory size of weights, bias and h0 does not depend
   // on Ti size, thus we need another key to cache them
@@ -368,6 +382,8 @@ class FusionGRUMKLDNNKernel : public framework::OpKernel<T> {
     // Get attributes
     const bool is_reverse = ctx.Attr<bool>("is_reverse");
     const bool origin_mode = ctx.Attr<bool>("origin_mode");
+    const auto& bidirectional_type = ctx.Attr<std::string>("bidirectional_type");
+    //const bool is_bidirectional = (bidirectional_type != "none");
 
     // Get tensor dimensions
     const auto x_dims = framework::vectorize(input->dims());
@@ -385,10 +401,10 @@ class FusionGRUMKLDNNKernel : public framework::OpKernel<T> {
           return res;
         }();
     const int64_t IC = x_dims[1];         // Input channels
-    const int64_t OC = weight_h_dims[0];  // Output channels
+    const int64_t OC = weight_h_dims[1] / 3;  // Output channels
 
     GRUMKLDNNHandler<T> handler(ctx, dev_ctx, mkldnn_engine, ctx.GetPlace(),
-                                input, weight_h, h0, is_reverse, N, Ti, IC, OC,
+                                input, weight_h, h0, is_reverse, bidirectional_type, N, Ti, IC, OC,
                                 ctx.InputName("X") + ctx.InputName("WeightH"));
 
     auto input_memory_p =

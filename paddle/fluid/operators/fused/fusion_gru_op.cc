@@ -34,6 +34,9 @@ void FusionGRUOp::InferShape(framework::InferShapeContext* ctx) const {
   OP_INOUT_CHECK(ctx->HasOutput("XX"), "Output", "XX", "fusion_gru");
   OP_INOUT_CHECK(ctx->HasOutput("Hidden"), "Output", "Hidden", "fusion_gru");
 
+  const auto bidirectional_type = ctx->Attrs().Get<std::string>("bidirectional_type");
+  const bool is_bidirectional = (bidirectional_type == "concat") || (bidirectional_type == "sum");
+
   auto x_dims = ctx->GetInputDim("X");
   PADDLE_ENFORCE_EQ(x_dims.size(), 2,
                     platform::errors::InvalidArgument(
@@ -47,7 +50,7 @@ void FusionGRUOp::InferShape(framework::InferShapeContext* ctx) const {
                         "The rank of Input(WeightX) should be 2, but received "
                         "WeightX dim size is:%d, WeightX dim is:[%s] ",
                         wx_dims.size(), wx_dims));
-  PADDLE_ENFORCE_EQ(wx_dims[0], x_dims[1],
+  PADDLE_ENFORCE_EQ(wx_dims[0], (is_bidirectional ? 2 : 1)*x_dims[1],
                     platform::errors::InvalidArgument(
                         "The first dimension of Input(WeightX) "
                         "should equal to second dimension of input x, but "
@@ -62,7 +65,7 @@ void FusionGRUOp::InferShape(framework::InferShapeContext* ctx) const {
                         "The rank of Input(WeightH) should be 2, but received "
                         "WeightH dim size is:%d, WeightH dim is:[%s]",
                         wh_dims.size(), wh_dims));
-  PADDLE_ENFORCE_EQ(wh_dims[0], frame_size,
+  PADDLE_ENFORCE_EQ(wh_dims[0], (is_bidirectional ? 2 : 1)*frame_size,
                     platform::errors::InvalidArgument(
                         "The first dimension of WeightH "
                         "should equal to frame_size, but received WeightH's "
@@ -91,7 +94,7 @@ void FusionGRUOp::InferShape(framework::InferShapeContext* ctx) const {
                           "The rank of Input(Bias) should be 2, but received "
                           "Bias rank is:%d, Bias dim is:[%s]",
                           b_dims.size(), b_dims));
-    PADDLE_ENFORCE_EQ(b_dims[0], 1,
+    PADDLE_ENFORCE_EQ(b_dims[0], (is_bidirectional ? 2 : 1)*1,
                       platform::errors::InvalidArgument(
                           "The first dimension of Input(Bias) should be 1, but "
                           "received Bias first dim is:%d, Bias dim is:[%s]",
@@ -102,7 +105,7 @@ void FusionGRUOp::InferShape(framework::InferShapeContext* ctx) const {
                           "received bias dim is:[%s], frame size is:%d",
                           b_dims, frame_size));
   }
-  framework::DDim out_dims({x_dims[0], frame_size});
+  framework::DDim out_dims({x_dims[0], (is_bidirectional ? 2 : 1)*frame_size});
   ctx->SetOutputDim("Hidden", out_dims);
   ctx->ShareLoD("X", "Hidden");
   int xx_width;
@@ -202,6 +205,12 @@ void FusionGRUOpMaker::Make() {
   AddAttr<bool>("use_mkldnn",
                 "(bool, default false) Only used in mkldnn kernel")
       .SetDefault(false);
+  AddAttr<std::string>(
+      "bidirectional_type",
+      "(string, default none)",
+      "Defines behaviour of bidirectional GRU operator"
+      "Used only in oneDNN kernel")
+      .SetDefault("none");
   AddAttr<bool>(
         "use_bfloat16",
         "(bool, default false) "

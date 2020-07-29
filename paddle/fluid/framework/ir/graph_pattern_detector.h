@@ -596,6 +596,34 @@ struct GRU : public PatternBase {
   PATTERN_DECL_NODE(Hidden);
 };
 
+struct BidirectionalFusionGRU : public PatternBase {
+  BidirectionalFusionGRU(PDPattern* pattern, const std::string& name_scope)
+      : PatternBase(pattern, name_scope, "bidirectional_fusion_gru") {}
+
+  PDNode* operator()(PDNode* x, const std::string& post_op_type);
+
+  // Operators
+  PATTERN_DECL_NODE(fusion_gru1);
+  PATTERN_DECL_NODE(fusion_gru2);
+  PATTERN_DECL_NODE(post_op);
+
+  // Inputs
+  PATTERN_DECL_NODE(gru_X);
+
+  PATTERN_DECL_NODE(fusion_gru1_Bias);
+  PATTERN_DECL_NODE(fusion_gru1_WeightX);
+  PATTERN_DECL_NODE(fusion_gru1_WeightH);
+
+  PATTERN_DECL_NODE(fusion_gru2_Bias);
+  PATTERN_DECL_NODE(fusion_gru2_WeightX);
+  PATTERN_DECL_NODE(fusion_gru2_WeightH);
+
+  // Outputs
+  PATTERN_DECL_NODE(fusion_gru1_Hidden);
+  PATTERN_DECL_NODE(fusion_gru2_Hidden);
+  PATTERN_DECL_NODE(post_op_output);
+};
+
 // The following pattern is used to fuse batch_norm and act
 // formula: act(bn(x))
 // op: batch_norm + act

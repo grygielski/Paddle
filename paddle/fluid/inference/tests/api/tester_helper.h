@@ -394,7 +394,7 @@ void PredictionRun(PaddlePredictor *predictor,
         FLAGS_iterations;  // ... unless the number of iterations is set
   
   /////////////////////////////////////
-  num_times = 10;
+  num_times = 1;
   iterations = inputs.size();
   ////////////////////////////////////
 

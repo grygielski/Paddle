@@ -1048,6 +1048,61 @@ PDNode *patterns::GRU::operator()(PDNode *x) {
   return Hidden;
 }
 
+PDNode *patterns::BidirectionalFusionGRU::operator()(PDNode *x, const std::string& post_op_type) {
+  x->assert_is_op_input("fusion_gru", "X");
+
+  // Create Operators
+  auto *fusion_gru1_op = pattern->NewNode(fusion_gru1_repr())->assert_is_op("fusion_gru");
+  auto *fusion_gru2_op = pattern->NewNode(fusion_gru2_repr())->assert_is_op("fusion_gru");
+  auto *post_op = pattern->NewNode(post_op_repr())->assert_is_op(post_op_type);
+
+  // Create common input var
+  auto *gru_X_var = pattern->NewNode(gru_X_repr())
+                              ->AsInput()
+                              ->assert_is_op_input("fusion_gru", "X");
+
+  // Create fusion_gru1 vars
+  auto *fusion_gru1_WeightX_var = pattern->NewNode(fusion_gru1_WeightX_repr())
+                              ->AsInput()
+                              ->assert_is_op_input("fusion_gru", "WeightX");
+  auto *fusion_gru1_WeightH_var = pattern->NewNode(fusion_gru1_WeightH_repr())
+                              ->AsInput()
+                              ->assert_is_op_input("fusion_gru", "WeightH");
+  auto *fusion_gru1_Bias_var = pattern->NewNode(fusion_gru1_Bias_repr())
+                              ->AsInput()
+                              ->assert_is_op_input("fusion_gru", "Bias");
+  auto *fusion_gru1_Hidden_var = pattern->NewNode(fusion_gru1_Hidden_repr())
+                              ->AsIntermediate()
+                              ->assert_is_op_output("fusion_gru")
+                              ->assert_is_op_nth_input(post_op_type, "X", 0);
+
+  // Create fusion_gru2 vars
+  auto *fusion_gru2_WeightX_var = pattern->NewNode(fusion_gru2_WeightX_repr())
+                              ->AsInput()
+                              ->assert_is_op_input("fusion_gru", "WeightX");
+  auto *fusion_gru2_WeightH_var = pattern->NewNode(fusion_gru2_WeightH_repr())
+                              ->AsInput()
+                              ->assert_is_op_input("fusion_gru", "WeightH");
+  auto *fusion_gru2_Bias_var = pattern->NewNode(fusion_gru2_Bias_repr())
+                              ->AsInput()
+                              ->assert_is_op_input("fusion_gru", "Bias");
+  auto *fusion_gru2_Hidden_var = pattern->NewNode(fusion_gru2_Hidden_repr())
+                              ->AsIntermediate()
+                              ->assert_is_op_output("fusion_gru")
+                              ->assert_is_op_nth_input(post_op_type, "X", 1);
+
+  // Create post_op vars
+  auto *post_op_output_var = pattern->NewNode(post_op_output_repr())
+                                 ->AsOutput()
+                                 ->assert_is_op_output(post_op_type);
+  
+  fusion_gru1_op->LinksFrom({gru_X_var, fusion_gru1_WeightX_var, fusion_gru1_WeightH_var, fusion_gru1_Bias_var}).LinksTo({fusion_gru1_Hidden_var});
+  fusion_gru2_op->LinksFrom({gru_X_var, fusion_gru2_WeightX_var, fusion_gru2_WeightH_var, fusion_gru2_Bias_var}).LinksTo({fusion_gru2_Hidden_var});
+  post_op->LinksFrom({fusion_gru1_Hidden_var, fusion_gru2_Hidden_var}).LinksTo({post_op_output_var});
+
+  return post_op_output_var;
+}
+
 PDNode *patterns::ActElewiseAdd::operator()(
     paddle::framework::ir::PDNode *in_var,
     std::unordered_set<std::string> act_types) {
