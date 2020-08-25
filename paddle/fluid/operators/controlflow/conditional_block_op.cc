@@ -16,6 +16,11 @@ limitations under the License. */
 
 #include "paddle/fluid/operators/assign_op.h"
 #include "paddle/fluid/operators/math/math_function.h"
+#ifdef PADDLE_WITH_MKLDNN
+#include "paddle/fluid/platform/mkldnn_helper.h"
+#endif
+
+DECLARE_bool(use_mkldnn);
 
 namespace paddle {
 namespace operators {
@@ -72,6 +77,9 @@ class ConditionalBlockOp : public ConditionalOp {
       exec.Run(*block->Program(), &cur_scope, block->ID(), false, true,
                skip_vars, /* force_disable_gc */ false,
                /* keep_kid_scopes */ true);
+#ifdef PADDLE_WITH_MKLDNN
+      if (FLAGS_use_mkldnn) DontClearMKLDNNCache(dev_place);
+#endif
     }
   }
 };

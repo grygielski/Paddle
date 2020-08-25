@@ -164,6 +164,8 @@ CpuPassStrategy::CpuPassStrategy() : PassStrategy({}) {
                   "conv_eltwiseadd_bn_fuse_pass",            //
                   "conv_transpose_bn_fuse_pass",             //
                   "conv_transpose_eltwiseadd_bn_fuse_pass",  //
+                  "conv_affine_channel_fuse_pass",             //
+                  "conv_eltwiseadd_affine_channel_fuse_pass",  //
                   "is_test_pass",                            //
                   // following pass should be located in the last, since
                   // it will work on all fused ops.

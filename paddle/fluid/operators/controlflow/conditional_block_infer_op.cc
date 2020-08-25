@@ -13,6 +13,11 @@ See the License for the specific language governing permissions and
 limitations under the License. */
 
 #include "paddle/fluid/operators/controlflow/conditional_block_op.h"
+#ifdef PADDLE_WITH_MKLDNN
+#include "paddle/fluid/platform/mkldnn_helper.h"
+#endif
+
+DECLARE_bool(use_mkldnn);
 
 namespace paddle {
 namespace operators {
@@ -63,6 +68,9 @@ class ConditionalBlockInferOp : public ConditionalOp {
       auto *block = Attr<framework::BlockDesc *>("sub_block");
       exec.Run(*block->Program(), &cur_scope, block->ID(), false);
       scope.DeleteScope(scopes->front());
+#ifdef PADDLE_WITH_MKLDNN
+      if (FLAGS_use_mkldnn) DontClearMKLDNNCache(dev_place);
+#endif
     }
   }
 };

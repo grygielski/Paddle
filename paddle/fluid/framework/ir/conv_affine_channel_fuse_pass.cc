@@ -109,11 +109,11 @@ void ConvAffineChannelFusePass::ApplyImpl(ir::Graph* graph) const {
     GET_CONV_BN_NODES(conv_ac_pattern);
 
     // check if fuse can be done and if MKL-DNN should be used
-    FuseOptions fuse_option = FindFuseOption(*conv, *affine_channel);
-    if (fuse_option == DO_NOT_FUSE) {
-      VLOG(3) << "do not perform conv+affinechannel fuse";
-      return;
-    }
+    // FuseOptions fuse_option = FindFuseOption(*conv, *affine_channel);
+    // if (fuse_option == DO_NOT_FUSE) {
+    //   VLOG(3) << "do not perform conv+affinechannel fuse";
+    //   return;
+    // }
 
     // Create eltwise_y (conv bias) variable
     VarDesc eltwise_y_in_desc(
@@ -143,6 +143,7 @@ void ConvAffineChannelFusePass::ApplyImpl(ir::Graph* graph) const {
     desc.SetOutput("Out", std::vector<std::string>({ac_out->Name()}));
     desc.SetType("elementwise_add");
     desc.SetAttr("axis", 1);
+    desc.SetAttr("use_mkldnn", true);
     auto eltwise_op = g->CreateOpNode(&desc);  // OpDesc will be copied.
 
     GraphSafeRemoveNodes(graph, {ac_scale, ac_bias, affine_channel});
